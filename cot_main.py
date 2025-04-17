@@ -6,6 +6,8 @@ from google import genai
 import asyncio
 from rich.console import Console
 from rich.panel import Panel
+import json
+from typing import Tuple, Optional, Dict, Any
 
 console = Console()
 
@@ -39,6 +41,52 @@ async def get_llm_response(client, prompt):
     if response and response.text:
         return response.text.strip()
     return None
+
+def validate_json(function_call: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    """
+    Validates the JSON structure in a function call string.
+    
+    Args:
+        function_call: String starting with 'FUNCTION_CALL: ' followed by JSON
+        
+    Returns:
+        Tuple containing:
+        - bool: Whether validation passed
+        - Optional[Dict]: Parsed JSON if valid, None if invalid
+        - str: Validation message
+    """
+    try:
+        # Extract JSON part after FUNCTION_CALL:
+        if not function_call.startswith("FUNCTION_CALL: "):
+            return False, None, "Invalid format: Must start with 'FUNCTION_CALL: '"
+            
+        json_str = function_call.replace("FUNCTION_CALL: ", "", 1)
+        
+        # Parse JSON
+        parsed_json = json.loads(json_str)
+        
+        # Validate required fields
+        if not isinstance(parsed_json, dict):
+            return False, None, "Invalid JSON: Must be an object"
+            
+        if "name" not in parsed_json:
+            return False, None, "Missing required field: 'name'"
+            
+        if not isinstance(parsed_json["name"], str):
+            return False, None, "Invalid field: 'name' must be a string"
+            
+        if "args" not in parsed_json:
+            return False, None, "Missing required field: 'args'"
+            
+        if not isinstance(parsed_json["args"], dict):
+            return False, None, "Invalid field: 'args' must be an object"
+            
+        return True, parsed_json, "Validation successful"
+        
+    except json.JSONDecodeError as e:
+        return False, None, f"Invalid JSON format: {str(e)}"
+    except Exception as e:
+        return False, None, f"Validation error: {str(e)}"
 
 async def main():
     try:
@@ -102,56 +150,129 @@ async def main():
                     console.print(f"\n[yellow]Assistant:[/yellow] {result}")
 
                     if result.startswith("FUNCTION_CALL:"):
-                        _, function_info = result.split(":", 1)
-                        parts = [p.strip() for p in function_info.split("|")]
-                        func_name = parts[0]
+                        # Validate JSON
+                        is_valid, parsed_json, validation_message = validate_json(result)
                         
-                        if func_name == "show_reasoning":
-                            steps = eval(parts[1])
-                            await session.call_tool("show_reasoning", arguments={"steps": steps})
-                            prompt += f"\nUser: Next step?"
+                        # Log validation result
+                        if not is_valid:
+                            console.print(Panel(
+                                f"[red]JSON Validation Failed:[/red]\n{validation_message}",
+                                title="Validation Result",
+                                border_style="red"
+                            ))
+                        else:
+                            console.print(Panel(
+                                "[green]JSON Validation Passed[/green]",
+                                title="Validation Result",
+                                border_style="green"
+                            ))
+                        
+                        # Add validation result to conversation history
+                        prompt += f"\nSystem: JSON validation: {validation_message}"
+                        
+                        # Proceed with function call regardless of validation result
+                        if parsed_json:  # If we have parsed JSON, use it
+                            func_name = parsed_json["name"]
+                            args = parsed_json["args"]
                             
-                        elif func_name == "calculate":
-                            expression = parts[1]
-                            calc_result = await session.call_tool("calculate", arguments={"expression": expression})
-                            if calc_result.content:
-                                value = calc_result.content[0].text
+                            if func_name == "show_reasoning":
+                                steps = args.get("steps", [])
+                                await session.call_tool("show_reasoning", arguments={"steps": steps})
+                                prompt += f"\nUser: Next step?"
                                 
-                                # Add self-check prompt here
-                                self_check_prompt = f"""Given the calculation:
-                                Expression: {expression}
-                                Result: {value}
-                                
-                                Please perform an internal self-check:
-                                1. Does this result seem reasonable for the given expression?
-                                2. Are the orders of magnitude correct?
-                                3. Have I followed proper mathematical rules?
-                                4. Is there any obvious error in the calculation?
+                            elif func_name == "calculate":
+                                expression = args.get("expression", "")
+                                calc_result = await session.call_tool("calculate", arguments={"expression": expression})
+                                if calc_result.content:
+                                    value = calc_result.content[0].text
+                                    
+                                    # Self-check prompt (as implemented before)
+                                    self_check_prompt = f"""Given the calculation:
+                                    Expression: {expression}
+                                    Result: {value}
+                                    
+                                    Please perform an internal self-check:
+                                    1. Does this result seem reasonable for the given expression?
+                                    2. Are the orders of magnitude correct?
+                                    3. Have I followed proper mathematical rules?
+                                    4. Is there any obvious error in the calculation?
 
-                                Respond with ONLY 'YES' if all checks pass, or explain why they don't pass.
-                                Note that you need to strictly respond with 'YES' if everything is correct.
-                                """
+                                    Respond with ONLY 'YES' if all checks pass, or explain why they don't pass.
+                                    """
+                                    
+                                    self_check_response = await get_llm_response(client, self_check_prompt)
+                                    
+                                    if self_check_response and self_check_response.strip() != "YES":
+                                        console.print(Panel(
+                                            f"[yellow]Self-check raised concerns:[/yellow]\n{self_check_response}",
+                                            title="Self-Check Result",
+                                            border_style="yellow"
+                                        ))
+                                    
+                                    prompt += f"\nUser: Result is {value}. Let's verify this step."
+                                    conversation_history.append((expression, float(value)))
+                                    
+                            elif func_name == "verify":
+                                expression = args.get("expression", "")
+                                expected = float(args.get("expected", 0))
+                                await session.call_tool("verify", arguments={
+                                    "expression": expression,
+                                    "expected": expected
+                                })
+                                prompt += f"\nUser: Verified. Next step?"
+                        
+                        else:  # If JSON parsing failed, use old parsing method as fallback
+                            _, function_info = result.split(":", 1)
+                            parts = [p.strip() for p in function_info.split("|")]
+                            func_name = parts[0]
+                            
+                            if func_name == "show_reasoning":
+                                steps = eval(parts[1])
+                                await session.call_tool("show_reasoning", arguments={"steps": steps})
+                                prompt += f"\nUser: Next step?"
                                 
-                                self_check_response = await get_llm_response(client, self_check_prompt)
-                                
-                                if self_check_response and self_check_response.strip() != "YES":
-                                    console.print(Panel(
-                                        f"[yellow]Self-check raised concerns:[/yellow]\n{self_check_response}",
-                                        title="Self-Check Result",
-                                        border_style="yellow"
-                                    ))
-                                
-                                # Continue with verification regardless of self-check result
-                                prompt += f"\nUser: Result is {value}. Let's verify this step."
-                                conversation_history.append((expression, float(value)))
-                                
-                        elif func_name == "verify":
-                            expression, expected = parts[1], float(parts[2])
-                            await session.call_tool("verify", arguments={
-                                "expression": expression,
-                                "expected": expected
-                            })
-                            prompt += f"\nUser: Verified. Next step?"
+                            elif func_name == "calculate":
+                                expression = parts[1]
+                                calc_result = await session.call_tool("calculate", arguments={"expression": expression})
+                                if calc_result.content:
+                                    value = calc_result.content[0].text
+                                    
+                                    # Add self-check prompt here
+                                    self_check_prompt = f"""Given the calculation:
+                                    Expression: {expression}
+                                    Result: {value}
+                                    
+                                    Please perform an internal self-check:
+                                    1. Does this result seem reasonable for the given expression?
+                                    2. Are the orders of magnitude correct?
+                                    3. Have I followed proper mathematical rules?
+                                    4. Is there any obvious error in the calculation?
+
+                                    Respond with ONLY 'YES' if all checks pass, or explain why they don't pass.
+                                    Note that you need to strictly respond with 'YES' if everything is correct.
+                                    """
+                                    
+                                    self_check_response = await get_llm_response(client, self_check_prompt)
+                                    
+                                    if self_check_response and self_check_response.strip() != "YES":
+                                        console.print(Panel(
+                                            f"[yellow]Self-check raised concerns:[/yellow]\n{self_check_response}",
+                                            title="Self-Check Result",
+                                            border_style="yellow"
+                                        ))
+                                    
+                                    # Continue with verification regardless of self-check result
+                                    self_check_response = f"\nUser: Result is {value}. Let's verify this step."
+                                    prompt += self_check_response
+                                    conversation_history.append((expression, float(value)))
+                                    
+                            elif func_name == "verify":
+                                expression, expected = parts[1], float(parts[2])
+                                await session.call_tool("verify", arguments={
+                                    "expression": expression,
+                                    "expected": expected
+                                })
+                                prompt += f"\nUser: Verified. Next step?"
                             
                     elif result.startswith("FINAL_ANSWER:"):
                         # Verify the final answer against the original problem
