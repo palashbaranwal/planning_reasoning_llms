@@ -144,7 +144,9 @@ async def main():
                 User: Verified correct.
                 Assistant: FINAL_ANSWER: [20]"""
 
-                problem = "(23 + 7) * (15 - 8)"
+                problem = "(23 + 7) * (15 - 8) * (12.5/25.0)"
+                # problem = """Get the ASCII values of all characters in the word "INDIA", then compute the sum of exponentials of those ASCII values."""
+
                 console.print(Panel(f"Problem: {problem}", border_style="cyan"))
 
                 # Initialize conversation

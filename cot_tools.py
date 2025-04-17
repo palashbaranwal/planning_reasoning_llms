@@ -10,6 +10,9 @@ import re
 console = Console()
 mcp = FastMCP("CoTCalculator")
 
+
+
+
 @mcp.tool()
 def show_reasoning(steps: list) -> TextContent:
     """Show the step-by-step reasoning process"""
