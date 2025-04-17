@@ -88,6 +88,15 @@ def validate_json(function_call: str) -> Tuple[bool, Optional[Dict[str, Any]], s
     except Exception as e:
         return False, None, f"Validation error: {str(e)}"
 
+async def handle_tool_error(session, error_msg: str, step_context: str) -> str:
+    """
+    Handle tool errors by calling fallback_reasoning
+    Returns the fallback message for the conversation
+    """
+    fallback_description = f"Error in step: {step_context}\nError details: {error_msg}"
+    await session.call_tool("fallback_reasoning", arguments={"step_description": fallback_description})
+    return f"\nUser: Error occurred. Fallback triggered. Please reconsider this step or try an alternative approach."
+
 async def main():
     try:
         console.print(Panel("Chain of Thought Calculator", border_style="cyan"))
@@ -151,126 +160,124 @@ async def main():
                     console.print(f"\n[yellow]Assistant:[/yellow] {result}")
 
                     if result.startswith("FUNCTION_CALL:"):
-                        # Validate JSON
+                        # Validate JSON first
                         is_valid, parsed_json, validation_message = validate_json(result)
                         
-                        # Log validation result
-                        if not is_valid:
-                            console.print(Panel(
-                                f"[red]JSON Validation Failed:[/red]\n{validation_message}",
-                                title="Validation Result",
-                                border_style="red"
-                            ))
-                        else:
-                            console.print(Panel(
-                                "[green]JSON Validation Passed[/green]",
-                                title="Validation Result",
-                                border_style="green"
-                            ))
-                        
-                        # Add validation result to conversation history
-                        prompt += f"\nSystem: JSON validation: {validation_message}"
-                        
-                        # Proceed with function call regardless of validation result
-                        if parsed_json:  # If we have parsed JSON, use it
-                            func_name = parsed_json["name"]
-                            args = parsed_json["args"]
-                            
-                            if func_name == "show_reasoning":
-                                steps = args.get("steps", [])
-                                await session.call_tool("show_reasoning", arguments={"steps": steps})
-                                prompt += f"\nUser: Next step?"
+                        try:
+                            if parsed_json:
+                                func_name = parsed_json["name"]
+                                args = parsed_json["args"]
                                 
-                            elif func_name == "calculate":
-                                expression = args.get("expression", "")
-                                calc_result = await session.call_tool("calculate", arguments={"expression": expression})
-                                if calc_result.content:
-                                    value = calc_result.content[0].text
-                                    
-                                    # Self-check prompt (as implemented before)
-                                    self_check_prompt = f"""Given the calculation:
-                                    Expression: {expression}
-                                    Result: {value}
-                                    
-                                    Is the result reasonable?
+                                if func_name == "show_reasoning":
+                                    try:
+                                        steps = args.get("steps", [])
+                                        await session.call_tool("show_reasoning", arguments={"steps": steps})
+                                        prompt += f"\nUser: Next step?"
+                                    except Exception as e:
+                                        prompt += await handle_tool_error(
+                                            session, 
+                                            str(e), 
+                                            f"show_reasoning with steps: {steps}"
+                                        )
+                                        
+                                elif func_name == "calculate":
+                                    try:
+                                        expression = args.get("expression", "")
+                                        calc_result = await session.call_tool("calculate", arguments={"expression": expression})
+                                        
+                                        if calc_result.content:
+                                            value = calc_result.content[0].text
+                                            
+                                            # Self-check with fallback
+                                            try:
+                                                self_check_prompt = f"""Given the calculation:
+                                                Expression: {expression}
+                                                Result: {value}
+                                                
+                                                Is the result reasonable?
 
-                                    Respond with ONLY 'YES' if all checks pass, or explain why they don't pass.
-                                    """
+                                                Respond with ONLY 'YES' if all checks pass, or explain why they don't pass.
+                                                """
+                                                
+                                                self_check_response = await get_llm_response(client, self_check_prompt)
+                                                
+                                                if not self_check_response:
+                                                    prompt += await handle_tool_error(
+                                                        session,
+                                                        "Self-check failed to respond",
+                                                        f"self-check for calculation: {expression} = {value}"
+                                                    )
+                                                elif self_check_response.strip() != "YES":
+                                                    # Call fallback but continue with verification
+                                                    await session.call_tool("fallback_reasoning", arguments={
+                                                        "step_description": f"Self-check concerns: {self_check_response}"
+                                                    })
+                                            
+                                            except Exception as e:
+                                                prompt += await handle_tool_error(
+                                                    session,
+                                                    str(e),
+                                                    f"self-check for calculation: {expression}"
+                                                )
+                                            
+                                            prompt += f"\nUser: Result is {value}. Let's verify this step."
+                                            conversation_history.append((expression, float(value)))
+                                        else:
+                                            prompt += await handle_tool_error(
+                                                session,
+                                                "No calculation result returned",
+                                                f"calculate: {expression}"
+                                            )
+                                            
+                                    except Exception as e:
+                                        prompt += await handle_tool_error(
+                                            session,
+                                            str(e),
+                                            f"calculate: {expression}"
+                                        )
+                                        
+                                elif func_name == "verify":
+                                    try:
+                                        expression = args.get("expression", "")
+                                        expected = float(args.get("expected", 0))
+                                        verify_result = await session.call_tool("verify", arguments={
+                                            "expression": expression,
+                                            "expected": expected
+                                        })
+                                        
+                                        if verify_result.content and verify_result.content[0].text.lower() == "false":
+                                            # Verification failed, trigger fallback
+                                            await session.call_tool("fallback_reasoning", arguments={
+                                                "step_description": f"Verification failed for {expression} = {expected}"
+                                            })
+                                        
+                                        prompt += f"\nUser: Verification completed. Next step?"
+                                        
+                                    except Exception as e:
+                                        prompt += await handle_tool_error(
+                                            session,
+                                            str(e),
+                                            f"verify: {expression} = {expected}"
+                                        )
                                     
-                                    self_check_response = await get_llm_response(client, self_check_prompt)
-                                    
-                                    if self_check_response and self_check_response.strip() != "YES":
-                                        console.print(Panel(
-                                            f"[yellow]Self-check raised concerns:[/yellow]\n{self_check_response}",
-                                            title="Self-Check Result",
-                                            border_style="yellow"
-                                        ))
-                                    
-                                    prompt += f"\nUser: Result is {value}. Let's verify this step."
-                                    conversation_history.append((expression, float(value)))
-                                    
-                            elif func_name == "verify":
-                                expression = args.get("expression", "")
-                                expected = float(args.get("expected", 0))
-                                await session.call_tool("verify", arguments={
-                                    "expression": expression,
-                                    "expected": expected
-                                })
-                                prompt += f"\nUser: Verified. Next step?"
-                        
-                        else:  # If JSON parsing failed, use old parsing method as fallback
-                            _, function_info = result.split(":", 1)
-                            parts = [p.strip() for p in function_info.split("|")]
-                            func_name = parts[0]
-                            
-                            if func_name == "show_reasoning":
-                                steps = eval(parts[1])
-                                await session.call_tool("show_reasoning", arguments={"steps": steps})
-                                prompt += f"\nUser: Next step?"
+                                elif func_name == "fallback_reasoning":
+                                    # Direct fallback call from LLM
+                                    try:
+                                        step_description = args.get("step_description", "")
+                                        await session.call_tool("fallback_reasoning", arguments={
+                                            "step_description": step_description
+                                        })
+                                        prompt += "\nUser: Fallback processed. Please proceed with an alternative approach."
+                                    except Exception as e:
+                                        console.print(f"[red]Error in fallback handling: {e}[/red]")
                                 
-                            elif func_name == "calculate":
-                                expression = parts[1]
-                                calc_result = await session.call_tool("calculate", arguments={"expression": expression})
-                                if calc_result.content:
-                                    value = calc_result.content[0].text
-                                    
-                                    # Add self-check prompt here
-                                    self_check_prompt = f"""Given the calculation:
-                                    Expression: {expression}
-                                    Result: {value}
-                                    
-                                    Please perform an internal self-check:
-                                    1. Does this result seem reasonable for the given expression?
-                                    2. Are the orders of magnitude correct?
-                                    3. Have I followed proper mathematical rules?
-                                    4. Is there any obvious error in the calculation?
+                        except Exception as e:
+                            prompt += await handle_tool_error(
+                                session,
+                                str(e),
+                                "general tool execution"
+                            )
 
-                                    Respond with ONLY 'YES' if all checks pass, or explain why they don't pass.
-                                    Note that you need to strictly respond with 'YES' if everything is correct.
-                                    """
-                                    
-                                    self_check_response = await get_llm_response(client, self_check_prompt)
-                                    
-                                    if self_check_response and self_check_response.strip() != "YES":
-                                        console.print(Panel(
-                                            f"[yellow]Self-check raised concerns:[/yellow]\n{self_check_response}",
-                                            title="Self-Check Result",
-                                            border_style="yellow"
-                                        ))
-                                    
-                                    # Continue with verification regardless of self-check result
-                                    self_check_response = f"\nUser: Result is {value}. Let's verify this step."
-                                    prompt += self_check_response
-                                    conversation_history.append((expression, float(value)))
-                                    
-                            elif func_name == "verify":
-                                expression, expected = parts[1], float(parts[2])
-                                await session.call_tool("verify", arguments={
-                                    "expression": expression,
-                                    "expected": expected
-                                })
-                                prompt += f"\nUser: Verified. Next step?"
-                            
                     elif result.startswith("FINAL_ANSWER:"):
                         # Verify the final answer against the original problem
                         if conversation_history:

@@ -206,6 +206,23 @@ def check_consistency(steps: list) -> TextContent:
             text=f"Error: {str(e)}"
         )
 
+@mcp.tool()
+def fallback_reasoning(step_description: str) -> TextContent:
+    """Handle errors or uncertainty in the calculation process"""
+    console.print("[blue]FUNCTION CALL:[/blue] fallback_reasoning()")
+    
+    # Create an error panel with the step description
+    console.print(Panel(
+        f"[yellow]Fallback triggered:[/yellow]\n{step_description}",
+        title="Fallback Reasoning",
+        border_style="red"
+    ))
+    
+    return TextContent(
+        type="text",
+        text=f"Fallback processed: {step_description}"
+    )
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "dev":
