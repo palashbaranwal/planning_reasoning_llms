@@ -110,12 +110,13 @@ async def main():
 
                 
                 Instructions:
-                1. Always start with reasoning. Use show_reasoning to break down the problem with labeled steps like "Step 1 (arithmetic): ...".
-                2. Then calculate using calculate().
-                3. After each calculation, verify using verify().
-                4. If you are unsure, or a tool result is inconsistent, call fallback() with an explanation.
-                5. Before giving the final answer, re-check the logic and calculations, and state explicitly if they pass self-checks.
-                6. Respond with exactly ONE line in one of the following formats:
+                1. Always start with reasoning. Use show_reasoning to break down the problem with labeled steps. This is mandatory for all the prompt you might get.
+                2. Tag each step with the type of reasoning used: Eg: ""Arithmetic", "Logical" and "Entity Lookup". This is mandatory for all step.
+                3. Then calculate using calculate().
+                4. After each calculation, verify using verify().
+                5. If you are unsure, or a tool result is inconsistent, call fallback() with an explanation.
+                6. Before giving the final answer, re-check the logic and calculations, and state explicitly if they pass self-checks.
+                7. Respond with exactly ONE line in one of the following formats:
                         FUNCTION_CALL: {"name": "function_name", "args": {"arg1": "value1", "arg2": "value2", ...}}
                         FINAL_ANSWER: [answer]
 
