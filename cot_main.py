@@ -191,11 +191,7 @@ async def main():
                                     Expression: {expression}
                                     Result: {value}
                                     
-                                    Please perform an internal self-check:
-                                    1. Does this result seem reasonable for the given expression?
-                                    2. Are the orders of magnitude correct?
-                                    3. Have I followed proper mathematical rules?
-                                    4. Is there any obvious error in the calculation?
+                                    Is the result reasonable?
 
                                     Respond with ONLY 'YES' if all checks pass, or explain why they don't pass.
                                     """
