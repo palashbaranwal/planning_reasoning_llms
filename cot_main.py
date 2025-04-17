@@ -68,10 +68,10 @@ async def main():
                 4. If you are unsure, or a tool result is inconsistent, call fallback() with an explanation.
                 5. Before giving the final answer, re-check the logic and calculations, and state explicitly if they pass self-checks.
                 6. Respond with exactly ONE line in one of the following formats:
-                        FUNCTION_CALL: function_name|param1|param2|...
+                        FUNCTION_CALL: {"name": "function_name", "args": {"arg1": "value1", "arg2": "value2", ...}}
                         FINAL_ANSWER: [answer]
-                        
-                        
+
+
                 Example:
                 User: Solve (2 + 3) * 4
                 Assistant: FUNCTION_CALL: show_reasoning|["1. First, solve inside parentheses: 2 + 3", "2. Then multiply the result by 4"]
