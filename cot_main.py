@@ -58,6 +58,8 @@ async def main():
                 show_reasoning(steps: list) - Display your reasoning steps. Each step must include a label for the type of reasoning (e.g., arithmetic, logic, pattern).
                 calculate(expression: str)- Calculate the result of an expression.
                 verify(expression: str, expected: float) - Check if a calculation is correct.
+                fallback(reason: str) - Use this if a tool fails or you are uncertain how to proceed.
+
                 
                 Instructions:
                 1. Always start with reasoning. Use show_reasoning to break down the problem with labeled steps like "Step 1 (arithmetic): ...".
@@ -74,13 +76,13 @@ async def main():
                 User: Solve (2 + 3) * 4
                 Assistant: FUNCTION_CALL: show_reasoning|["1. First, solve inside parentheses: 2 + 3", "2. Then multiply the result by 4"]
                 User: Next step?
-                Assistant: FUNCTION_CALL: calculate|2 + 3
+                Assistant: FUNCTION_CALL: {"name":"calculate","args":{"expression":"2 + 3"}}
                 User: Result is 5. Let's verify this step.
-                Assistant: FUNCTION_CALL: verify|2 + 3|5
+                Assistant: FUNCTION_CALL: {"name":"verify","args":{"expression":"2 + 3","expected":5}}
                 User: Verified. Next step?
-                Assistant: FUNCTION_CALL: calculate|5 * 4
+                Assistant: FUNCTION_CALL: {"name":"calculate","args":{"expression":"5 * 4"}}
                 User: Result is 20. Let's verify the final answer.
-                Assistant: FUNCTION_CALL: verify|(2 + 3) * 4|20
+                Assistant: FUNCTION_CALL: {"name":"verify","args":{"expression":"(2 + 3) * 4","expected":20}}
                 User: Verified correct.
                 Assistant: FINAL_ANSWER: [20]"""
 
@@ -114,6 +116,32 @@ async def main():
                             calc_result = await session.call_tool("calculate", arguments={"expression": expression})
                             if calc_result.content:
                                 value = calc_result.content[0].text
+                                
+                                # Add self-check prompt here
+                                self_check_prompt = f"""Given the calculation:
+                                Expression: {expression}
+                                Result: {value}
+                                
+                                Please perform an internal self-check:
+                                1. Does this result seem reasonable for the given expression?
+                                2. Are the orders of magnitude correct?
+                                3. Have I followed proper mathematical rules?
+                                4. Is there any obvious error in the calculation?
+
+                                Respond with ONLY 'YES' if all checks pass, or explain why they don't pass.
+                                Note that you need to strictly respond with 'YES' if everything is correct.
+                                """
+                                
+                                self_check_response = await get_llm_response(client, self_check_prompt)
+                                
+                                if self_check_response and self_check_response.strip() != "YES":
+                                    console.print(Panel(
+                                        f"[yellow]Self-check raised concerns:[/yellow]\n{self_check_response}",
+                                        title="Self-Check Result",
+                                        border_style="yellow"
+                                    ))
+                                
+                                # Continue with verification regardless of self-check result
                                 prompt += f"\nUser: Result is {value}. Let's verify this step."
                                 conversation_history.append((expression, float(value)))
                                 
