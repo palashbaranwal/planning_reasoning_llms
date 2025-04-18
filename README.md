@@ -2,6 +2,8 @@
 
 A sophisticated mathematical reasoning system that combines LLM-powered step-by-step problem solving with robust calculation tools and validation mechanisms.
 
+Demo - https://youtu.be/wqmizpGHJUg 
+
 ## Table of Contents
 - [Overview](#overview)
 - [System Architecture](#system-architecture)
